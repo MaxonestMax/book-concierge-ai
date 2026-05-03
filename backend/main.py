@@ -7,13 +7,9 @@ import time
 import os
 import json
 import hashlib
-import requests
 from openai import OpenAI
 
-app = FastAPI(
-    title="AI Book Concierge API",
-    version="1.1.0"
-)
+app = FastAPI(title="AI Book Concierge API", version="1.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,7 +25,6 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4.1-mini")
 
 client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
-
 PENDING_LED_COMMAND = None
 
 
@@ -86,7 +81,6 @@ def stable_color_for_title(title: str):
 
 def normalize_color_key(color: str) -> str:
     value = (color or "").strip().lower()
-
     mapping = {
         "blue": "blue", "синий": "blue", "כחול": "blue",
         "purple": "purple", "фиолетовый": "purple", "סגול": "purple",
@@ -97,24 +91,53 @@ def normalize_color_key(color: str) -> str:
         "cyan": "cyan", "голубой": "cyan", "טורקיז": "cyan",
         "white": "white", "белый": "white", "לבן": "white",
     }
-
     return mapping.get(value, value)
 
 
 def color_by_key(color_key: str):
     normalized = normalize_color_key(color_key)
-
     for color in ALLOWED_COLORS:
         if color["key"] == normalized:
             return color
-
     return ALLOWED_COLORS[0]
+
+
+def parse_led_range(value: str):
+    text = str(value or "").strip()
+    if not text or "-" not in text:
+        return None
+
+    parts = text.split("-")
+    try:
+        start = int(parts[0].strip())
+        end = int(parts[1].strip())
+    except Exception:
+        return None
+
+    if start < 0 or end < start:
+        return None
+
+    return {
+        "start": start,
+        "end": end,
+        "stop": end + 1
+    }
+
+
+def normalize_columns(df):
+    df.columns = (
+        df.columns
+        .str.strip()
+        .str.lower()
+        .str.replace(" ", "_", regex=False)
+    )
+    return df
 
 
 def read_inventory():
     url = f"{SHEET_URL}&t={int(time.time())}"
     df = pd.read_csv(url)
-    df.columns = df.columns.str.strip().str.lower()
+    df = normalize_columns(df)
 
     required_columns = [
         "title",
@@ -155,7 +178,6 @@ def read_inventory():
 
     for _, row in df.head(300).iterrows():
         price_value = row.get("price", 0)
-
         if pd.isna(price_value):
             price_value = 0
 
@@ -166,6 +188,10 @@ def read_inventory():
         if "image_url" in df.columns:
             image_url = str(row.get("image_url", "") or "").strip()
 
+        led_range = ""
+        if "led_range" in df.columns:
+            led_range = str(row.get("led_range", "") or "").strip()
+
         results.append({
             "title": title,
             "author": str(row.get("author", "")).strip(),
@@ -175,6 +201,7 @@ def read_inventory():
             "description": str(row.get("description", "")).strip(),
             "in_stock": True,
             "image_url": image_url,
+            "led_range": led_range,
             "color_key": color["key"],
             "color_emoji": color["emoji"],
             "color_en": color["en"],
@@ -185,12 +212,27 @@ def read_inventory():
     return results
 
 
+def find_book_by_title(title: str):
+    inventory = read_inventory()
+    target = (title or "").strip().lower()
+
+    for book in inventory:
+        if book["title"].strip().lower() == target:
+            return book
+
+    for book in inventory:
+        if target and target in book["title"].strip().lower():
+            return book
+
+    return None
+
+
 @app.get("/")
 def root():
     return {
         "status": "ok",
         "service": "AI Book Concierge API",
-        "version": "1.1.0",
+        "version": "1.2.0",
     }
 
 
@@ -198,14 +240,12 @@ def root():
 def debug():
     try:
         inventory = read_inventory()
-
         return {
             "status": "ok",
             "service": "AI Book Concierge API",
             "total_available": len(inventory),
             "sample": inventory[:10],
         }
-
     except Exception as e:
         return {
             "status": "error",
@@ -217,14 +257,12 @@ def debug():
 def debug_all():
     try:
         inventory = read_inventory()
-
         return {
             "status": "ok",
             "service": "AI Book Concierge API",
             "total_available": len(inventory),
             "data": inventory,
         }
-
     except Exception as e:
         return {
             "status": "error",
@@ -236,13 +274,11 @@ def debug_all():
 def recommend_books(request: RecommendRequest):
     try:
         inventory = read_inventory()
-
         return {
             "results": inventory[:300],
             "total_available": len(inventory),
             "message": "Returned all available books.",
         }
-
     except Exception as e:
         return {
             "results": [],
@@ -292,6 +328,7 @@ Return JSON only:
       "category": "string",
       "description": "short description in the user's language",
       "image_url": "string",
+      "led_range": "30-40",
       "color_key": "blue",
       "color_emoji": "🔵",
       "color_label": "Blue",
@@ -325,7 +362,6 @@ Return JSON only:
 
         try:
             return json.loads(raw_text)
-
         except json.JSONDecodeError:
             return {
                 "recommendations": [],
@@ -345,35 +381,45 @@ def set_led(request: SetLedRequest):
     global PENDING_LED_COMMAND
 
     try:
+        book = find_book_by_title(request.book_title)
+
+        if not book:
+            return {
+                "status": "error",
+                "message": f"Book not found in inventory: {request.book_title}",
+            }
+
+        led_range = parse_led_range(book.get("led_range", ""))
+
+        if not led_range:
+            return {
+                "status": "error",
+                "message": f"No valid led_range found for book: {request.book_title}",
+                "book_title": request.book_title,
+                "led_range": book.get("led_range", ""),
+            }
+
         selected_color = color_by_key(request.color)
-
         command_id = f"cmd_{int(time.time() * 1000)}"
-
-        wled_payload = {
-            "on": True,
-            "bri": 180,
-            "seg": [
-                {
-                    "col": [
-                        selected_color["rgb"]
-                    ]
-                }
-            ]
-        }
 
         PENDING_LED_COMMAND = {
             "command_id": command_id,
-            "book_title": request.book_title,
+            "book_title": book["title"],
             "color": selected_color["key"],
             "rgb": selected_color["rgb"],
-            "wled_payload": wled_payload,
+            "led_range": book.get("led_range", ""),
+            "start": led_range["start"],
+            "end": led_range["end"],
+            "stop": led_range["stop"],
+            "duration_seconds": 10,
+            "effect": "breathing",
             "created_at": int(time.time()),
         }
 
         return {
             "status": "ok",
             "mode": "bridge",
-            "message": "LED command queued for local bridge.",
+            "message": "LED range command queued for local bridge.",
             "command": PENDING_LED_COMMAND,
         }
 
