@@ -19,7 +19,7 @@ app = FastAPI(
 # ============================================================
 
 # ВСТАВЬ СЮДА СВОЙ GOOGLE SHEET CSV URL
-SHEET_URL = "https://docs.google.com/spreadsheets/d/XXXX/pub?output=csv"
+SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRojoKX5x12MGB5PbwNE2qTErL_HjpDUOupVIkXQtRrLabnXx4O1FZKKjetkU6r8AfJQfhDanuWQ1qh/pub?output=csv"
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.2")
