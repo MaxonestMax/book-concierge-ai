@@ -1,6 +1,7 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
+from typing import Optional
 import pandas as pd
 import time
 import os
@@ -14,26 +15,22 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# ============================================================
-# CONFIG
-# ============================================================
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# ВСТАВЬ СЮДА СВОЙ GOOGLE SHEET CSV URL
 SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRojoKX5x12MGB5PbwNE2qTErL_HjpDUOupVIkXQtRrLabnXx4O1FZKKjetkU6r8AfJQfhDanuWQ1qh/pub?output=csv"
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.2")
-
-# Optional. Потом можно добавить в Render Environment:
-# WLED_URL = http://192.168.1.50/json/state
 WLED_URL = os.environ.get("WLED_URL", "")
 
 client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
-
-# ============================================================
-# MODELS
-# ============================================================
 
 class RecommendRequest(BaseModel):
     query: str = ""
@@ -54,94 +51,28 @@ class SetLedRequest(BaseModel):
     color: str
 
 
-# ============================================================
-# COLOR LOGIC
-# ============================================================
-
 ALLOWED_COLORS = [
-    {
-        "key": "blue",
-        "emoji": "🔵",
-        "en": "Blue",
-        "ru": "синий",
-        "he": "כחול",
-        "rgb": [0, 80, 255],
-    },
-    {
-        "key": "purple",
-        "emoji": "🟣",
-        "en": "Purple",
-        "ru": "фиолетовый",
-        "he": "סגול",
-        "rgb": [140, 0, 255],
-    },
-    {
-        "key": "red",
-        "emoji": "🔴",
-        "en": "Red",
-        "ru": "красный",
-        "he": "אדום",
-        "rgb": [255, 0, 0],
-    },
-    {
-        "key": "orange",
-        "emoji": "🟠",
-        "en": "Orange",
-        "ru": "оранжевый",
-        "he": "כתום",
-        "rgb": [255, 120, 0],
-    },
-    {
-        "key": "yellow",
-        "emoji": "🟡",
-        "en": "Yellow",
-        "ru": "жёлтый",
-        "he": "צהוב",
-        "rgb": [255, 220, 0],
-    },
-    {
-        "key": "green",
-        "emoji": "🟢",
-        "en": "Green",
-        "ru": "зелёный",
-        "he": "ירוק",
-        "rgb": [0, 255, 80],
-    },
-    {
-        "key": "cyan",
-        "emoji": "🔷",
-        "en": "Cyan",
-        "ru": "голубой",
-        "he": "טורקיז",
-        "rgb": [0, 220, 255],
-    },
-    {
-        "key": "white",
-        "emoji": "⚪",
-        "en": "White",
-        "ru": "белый",
-        "he": "לבן",
-        "rgb": [255, 255, 255],
-    },
+    {"key": "blue", "emoji": "🔵", "en": "Blue", "ru": "синий", "he": "כחול", "rgb": [0, 80, 255]},
+    {"key": "purple", "emoji": "🟣", "en": "Purple", "ru": "фиолетовый", "he": "סגול", "rgb": [140, 0, 255]},
+    {"key": "red", "emoji": "🔴", "en": "Red", "ru": "красный", "he": "אדום", "rgb": [255, 0, 0]},
+    {"key": "orange", "emoji": "🟠", "en": "Orange", "ru": "оранжевый", "he": "כתום", "rgb": [255, 120, 0]},
+    {"key": "yellow", "emoji": "🟡", "en": "Yellow", "ru": "жёлтый", "he": "צהוב", "rgb": [255, 220, 0]},
+    {"key": "green", "emoji": "🟢", "en": "Green", "ru": "зелёный", "he": "ירוק", "rgb": [0, 255, 80]},
+    {"key": "cyan", "emoji": "🔷", "en": "Cyan", "ru": "голубой", "he": "טורקיז", "rgb": [0, 220, 255]},
+    {"key": "white", "emoji": "⚪", "en": "White", "ru": "белый", "he": "לבן", "rgb": [255, 255, 255]},
 ]
 
 
 def detect_language(text: str) -> str:
     text = text or ""
-
-    hebrew_chars = sum(1 for ch in text if "\u0590" <= ch <= "\u05FF")
-    cyrillic_chars = sum(1 for ch in text if "\u0400" <= ch <= "\u04FF")
-
-    if hebrew_chars > 0:
+    if any("\u0590" <= ch <= "\u05FF" for ch in text):
         return "he"
-
-    if cyrillic_chars > 0:
+    if any("\u0400" <= ch <= "\u04FF" for ch in text):
         return "ru"
-
     return "en"
 
 
-def stable_color_for_title(title: str) -> Dict[str, Any]:
+def stable_color_for_title(title: str):
     normalized = (title or "").strip().lower()
     digest = hashlib.md5(normalized.encode("utf-8")).hexdigest()
     index = int(digest, 16) % len(ALLOWED_COLORS)
@@ -150,74 +81,35 @@ def stable_color_for_title(title: str) -> Dict[str, Any]:
 
 def normalize_color_key(color: str) -> str:
     value = (color or "").strip().lower()
-
     mapping = {
-        "blue": "blue",
-        "синий": "blue",
-        "כחול": "blue",
-
-        "purple": "purple",
-        "фиолетовый": "purple",
-        "סגול": "purple",
-
-        "red": "red",
-        "красный": "red",
-        "אדום": "red",
-
-        "orange": "orange",
-        "оранжевый": "orange",
-        "כתום": "orange",
-
-        "yellow": "yellow",
-        "жёлтый": "yellow",
-        "желтый": "yellow",
-        "צהוב": "yellow",
-
-        "green": "green",
-        "зелёный": "green",
-        "зеленый": "green",
-        "ירוק": "green",
-
-        "cyan": "cyan",
-        "голубой": "cyan",
-        "טורקיז": "cyan",
-
-        "white": "white",
-        "белый": "white",
-        "לבן": "white",
+        "blue": "blue", "синий": "blue", "כחול": "blue",
+        "purple": "purple", "фиолетовый": "purple", "סגול": "purple",
+        "red": "red", "красный": "red", "אדום": "red",
+        "orange": "orange", "оранжевый": "orange", "כתום": "orange",
+        "yellow": "yellow", "жёлтый": "yellow", "желтый": "yellow", "צהוב": "yellow",
+        "green": "green", "зелёный": "green", "зеленый": "green", "ירוק": "green",
+        "cyan": "cyan", "голубой": "cyan", "טורקיז": "cyan",
+        "white": "white", "белый": "white", "לבן": "white",
     }
-
     return mapping.get(value, value)
 
 
-def color_by_key(color_key: str) -> Dict[str, Any]:
+def color_by_key(color_key: str):
     normalized = normalize_color_key(color_key)
-
     for color in ALLOWED_COLORS:
         if color["key"] == normalized:
             return color
-
     return ALLOWED_COLORS[0]
 
 
-# ============================================================
-# INVENTORY
-# ============================================================
-
-def read_inventory() -> List[Dict[str, Any]]:
+def read_inventory():
     url = f"{SHEET_URL}&t={int(time.time())}"
     df = pd.read_csv(url)
-
     df.columns = df.columns.str.strip().str.lower()
 
     required_columns = [
-        "title",
-        "author",
-        "price",
-        "currency",
-        "category",
-        "description",
-        "in_stock",
+        "title", "author", "price", "currency",
+        "category", "description", "in_stock"
     ]
 
     missing = [col for col in required_columns if col not in df.columns]
@@ -243,14 +135,12 @@ def read_inventory() -> List[Dict[str, Any]]:
     )
 
     df["price"] = pd.to_numeric(df["price"], errors="coerce")
-
     df = df[df["in_stock"] == True]
 
     results = []
 
     for _, row in df.head(300).iterrows():
         price_value = row.get("price", 0)
-
         if pd.isna(price_value):
             price_value = 0
 
@@ -280,16 +170,12 @@ def read_inventory() -> List[Dict[str, Any]]:
     return results
 
 
-# ============================================================
-# ROUTES
-# ============================================================
-
 @app.get("/")
 def root():
     return {
         "status": "ok",
         "service": "AI Book Concierge API",
-        "version": "1.0.0",
+        "version": "1.0.0"
     }
 
 
@@ -297,37 +183,16 @@ def root():
 def debug():
     try:
         inventory = read_inventory()
-
         return {
             "status": "ok",
             "service": "AI Book Concierge API",
             "total_available": len(inventory),
-            "sample": inventory[:10],
+            "sample": inventory[:10]
         }
-
     except Exception as e:
         return {
             "status": "error",
-            "message": str(e),
-        }
-
-
-@app.get("/debug-all")
-def debug_all():
-    try:
-        inventory = read_inventory()
-
-        return {
-            "status": "ok",
-            "service": "AI Book Concierge API",
-            "total_available": len(inventory),
-            "data": inventory,
-        }
-
-    except Exception as e:
-        return {
-            "status": "error",
-            "message": str(e),
+            "message": str(e)
         }
 
 
@@ -335,18 +200,16 @@ def debug_all():
 def recommend_books(request: RecommendRequest):
     try:
         inventory = read_inventory()
-
         return {
             "results": inventory[:300],
             "total_available": len(inventory),
-            "message": "Returned all available books. Client or AI should filter by genre, price, mood, and user request.",
+            "message": "Returned all available books."
         }
-
     except Exception as e:
         return {
             "results": [],
             "total_available": 0,
-            "message": f"Server error: {str(e)}",
+            "message": f"Server error: {str(e)}"
         }
 
 
@@ -356,7 +219,7 @@ def chat(request: ChatRequest):
         if client is None:
             return {
                 "recommendations": [],
-                "message": "OpenAI API key is not configured on the server.",
+                "message": "OpenAI API key is not configured on the server."
             }
 
         inventory = read_inventory()
@@ -366,24 +229,21 @@ def chat(request: ChatRequest):
 You are AI Book Concierge, a smart bookstore assistant.
 
 You receive a live inventory list from the backend.
-You must recommend books ONLY from this inventory.
+Recommend books ONLY from this inventory.
 
 Rules:
 - Never invent books.
 - Never use books outside the provided inventory.
-- Never recommend out-of-stock books.
-- Choose the best 3-5 books unless the user explicitly asks for all.
-- Respect user request: genre, price, age, mood, author, language.
-- Always use NIS as currency.
+- Choose the best 3-5 books unless the user asks for all.
+- Respect genre, price, age, mood, author, and language.
+- Always use NIS.
 - Do not use book emojis.
-- Use only the color data already attached to each book.
-- Do not use pink, brown, gray, black, beige, or dark colors.
-- Keep the answer language the same as the user language.
-- Return JSON only. No markdown. No comments.
+- Use only the color data attached to each book.
+- Return JSON only.
 """
 
         output_schema = """
-Return JSON only in this exact structure:
+Return JSON only:
 {
   "recommendations": [
     {
@@ -392,13 +252,13 @@ Return JSON only in this exact structure:
       "price": 89,
       "currency": "NIS",
       "category": "string",
-      "description": "short description in the user's language, 1-2 sentences",
+      "description": "short description in the user's language",
       "image_url": "string",
       "color_key": "blue",
       "color_emoji": "🔵",
       "color_label": "Blue",
       "display_line": "Title — Author — 89 NIS — 🔵 Blue",
-      "reason": "short reason in the user's language"
+      "reason": "short reason in user's language"
     }
   ],
   "message": "short message in user's language"
@@ -408,45 +268,7 @@ Return JSON only in this exact structure:
         input_payload = {
             "user_request": request.query,
             "user_language": user_language,
-            "inventory": inventory[:300],
-            "format_rules": {
-                "price": "Always write price as 89 NIS",
-                "display_line": "Title — Author — Price NIS — color emoji + color name",
-                "no_led_word": "Do not write the word LED",
-                "no_book_icons": "Do not use book emojis",
-                "colors": {
-                    "en": {
-                        "blue": "Blue",
-                        "purple": "Purple",
-                        "red": "Red",
-                        "orange": "Orange",
-                        "yellow": "Yellow",
-                        "green": "Green",
-                        "cyan": "Cyan",
-                        "white": "White"
-                    },
-                    "ru": {
-                        "blue": "синий",
-                        "purple": "фиолетовый",
-                        "red": "красный",
-                        "orange": "оранжевый",
-                        "yellow": "жёлтый",
-                        "green": "зелёный",
-                        "cyan": "голубой",
-                        "white": "белый"
-                    },
-                    "he": {
-                        "blue": "כחול",
-                        "purple": "סגול",
-                        "red": "אדום",
-                        "orange": "כתום",
-                        "yellow": "צהוב",
-                        "green": "ירוק",
-                        "cyan": "טורקיז",
-                        "white": "לבן"
-                    }
-                }
-            }
+            "inventory": inventory[:300]
         }
 
         response = client.responses.create(
@@ -458,20 +280,18 @@ Return JSON only in this exact structure:
         raw_text = response.output_text.strip()
 
         try:
-            parsed = json.loads(raw_text)
-            return parsed
-
+            return json.loads(raw_text)
         except json.JSONDecodeError:
             return {
                 "recommendations": [],
                 "message": "The AI response could not be parsed as JSON.",
-                "raw_response": raw_text,
+                "raw_response": raw_text
             }
 
     except Exception as e:
         return {
             "recommendations": [],
-            "message": f"Server error: {str(e)}",
+            "message": f"Server error: {str(e)}"
         }
 
 
@@ -485,9 +305,7 @@ def set_led(request: SetLedRequest):
             "bri": 180,
             "seg": [
                 {
-                    "col": [
-                        selected_color["rgb"]
-                    ]
+                    "col": [selected_color["rgb"]]
                 }
             ]
         }
@@ -499,14 +317,10 @@ def set_led(request: SetLedRequest):
                 "message": "LED command simulated. WLED_URL is not configured.",
                 "book_title": request.book_title,
                 "color": selected_color["key"],
-                "rgb": selected_color["rgb"],
+                "rgb": selected_color["rgb"]
             }
 
-        led_response = requests.post(
-            WLED_URL,
-            json=payload,
-            timeout=5
-        )
+        led_response = requests.post(WLED_URL, json=payload, timeout=5)
 
         return {
             "status": "ok",
@@ -515,11 +329,11 @@ def set_led(request: SetLedRequest):
             "book_title": request.book_title,
             "color": selected_color["key"],
             "rgb": selected_color["rgb"],
-            "wled_status_code": led_response.status_code,
+            "wled_status_code": led_response.status_code
         }
 
     except Exception as e:
         return {
             "status": "error",
-            "message": str(e),
+            "message": str(e)
         }
