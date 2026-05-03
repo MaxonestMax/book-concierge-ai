@@ -12,7 +12,7 @@ from openai import OpenAI
 
 app = FastAPI(
     title="AI Book Concierge API",
-    version="1.0.0"
+    version="1.1.0"
 )
 
 app.add_middleware(
@@ -26,10 +26,11 @@ app.add_middleware(
 SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRojoKX5x12MGB5PbwNE2qTErL_HjpDUOupVIkXQtRrLabnXx4O1FZKKjetkU6r8AfJQfhDanuWQ1qh/pub?output=csv"
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.2")
-WLED_URL = os.environ.get("WLED_URL", "")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4.1-mini")
 
 client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+
+PENDING_LED_COMMAND = None
 
 
 class RecommendRequest(BaseModel):
@@ -49,6 +50,10 @@ class ChatRequest(BaseModel):
 class SetLedRequest(BaseModel):
     book_title: str
     color: str
+
+
+class LedAckRequest(BaseModel):
+    command_id: str
 
 
 ALLOWED_COLORS = [
@@ -81,6 +86,7 @@ def stable_color_for_title(title: str):
 
 def normalize_color_key(color: str) -> str:
     value = (color or "").strip().lower()
+
     mapping = {
         "blue": "blue", "синий": "blue", "כחול": "blue",
         "purple": "purple", "фиолетовый": "purple", "סגול": "purple",
@@ -91,14 +97,17 @@ def normalize_color_key(color: str) -> str:
         "cyan": "cyan", "голубой": "cyan", "טורקיז": "cyan",
         "white": "white", "белый": "white", "לבן": "white",
     }
+
     return mapping.get(value, value)
 
 
 def color_by_key(color_key: str):
     normalized = normalize_color_key(color_key)
+
     for color in ALLOWED_COLORS:
         if color["key"] == normalized:
             return color
+
     return ALLOWED_COLORS[0]
 
 
@@ -108,8 +117,13 @@ def read_inventory():
     df.columns = df.columns.str.strip().str.lower()
 
     required_columns = [
-        "title", "author", "price", "currency",
-        "category", "description", "in_stock"
+        "title",
+        "author",
+        "price",
+        "currency",
+        "category",
+        "description",
+        "in_stock",
     ]
 
     missing = [col for col in required_columns if col not in df.columns]
@@ -141,6 +155,7 @@ def read_inventory():
 
     for _, row in df.head(300).iterrows():
         price_value = row.get("price", 0)
+
         if pd.isna(price_value):
             price_value = 0
 
@@ -175,7 +190,7 @@ def root():
     return {
         "status": "ok",
         "service": "AI Book Concierge API",
-        "version": "1.0.0"
+        "version": "1.1.0",
     }
 
 
@@ -183,16 +198,37 @@ def root():
 def debug():
     try:
         inventory = read_inventory()
+
         return {
             "status": "ok",
             "service": "AI Book Concierge API",
             "total_available": len(inventory),
-            "sample": inventory[:10]
+            "sample": inventory[:10],
         }
+
     except Exception as e:
         return {
             "status": "error",
-            "message": str(e)
+            "message": str(e),
+        }
+
+
+@app.get("/debug-all")
+def debug_all():
+    try:
+        inventory = read_inventory()
+
+        return {
+            "status": "ok",
+            "service": "AI Book Concierge API",
+            "total_available": len(inventory),
+            "data": inventory,
+        }
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e),
         }
 
 
@@ -200,16 +236,18 @@ def debug():
 def recommend_books(request: RecommendRequest):
     try:
         inventory = read_inventory()
+
         return {
             "results": inventory[:300],
             "total_available": len(inventory),
-            "message": "Returned all available books."
+            "message": "Returned all available books.",
         }
+
     except Exception as e:
         return {
             "results": [],
             "total_available": 0,
-            "message": f"Server error: {str(e)}"
+            "message": f"Server error: {str(e)}",
         }
 
 
@@ -219,7 +257,7 @@ def chat(request: ChatRequest):
         if client is None:
             return {
                 "recommendations": [],
-                "message": "OpenAI API key is not configured on the server."
+                "message": "OpenAI API key is not configured on the server.",
             }
 
         inventory = read_inventory()
@@ -268,7 +306,13 @@ Return JSON only:
         input_payload = {
             "user_request": request.query,
             "user_language": user_language,
-            "inventory": inventory[:300]
+            "inventory": inventory[:300],
+            "format_rules": {
+                "price": "Always write price as 89 NIS",
+                "display_line": "Title — Author — Price NIS — color emoji + color name",
+                "no_led_word": "Do not write the word LED",
+                "no_book_icons": "Do not use book emojis",
+            },
         }
 
         response = client.responses.create(
@@ -281,59 +325,91 @@ Return JSON only:
 
         try:
             return json.loads(raw_text)
+
         except json.JSONDecodeError:
             return {
                 "recommendations": [],
                 "message": "The AI response could not be parsed as JSON.",
-                "raw_response": raw_text
+                "raw_response": raw_text,
             }
 
     except Exception as e:
         return {
             "recommendations": [],
-            "message": f"Server error: {str(e)}"
+            "message": f"Server error: {str(e)}",
         }
 
 
 @app.post("/set-led")
 def set_led(request: SetLedRequest):
+    global PENDING_LED_COMMAND
+
     try:
         selected_color = color_by_key(request.color)
 
-        payload = {
+        command_id = f"cmd_{int(time.time() * 1000)}"
+
+        wled_payload = {
             "on": True,
             "bri": 180,
             "seg": [
                 {
-                    "col": [selected_color["rgb"]]
+                    "col": [
+                        selected_color["rgb"]
+                    ]
                 }
             ]
         }
 
-        if not WLED_URL:
-            return {
-                "status": "ok",
-                "mode": "simulation",
-                "message": "LED command simulated. WLED_URL is not configured.",
-                "book_title": request.book_title,
-                "color": selected_color["key"],
-                "rgb": selected_color["rgb"]
-            }
-
-        led_response = requests.post(WLED_URL, json=payload, timeout=5)
-
-        return {
-            "status": "ok",
-            "mode": "wled",
-            "message": "LED command sent.",
+        PENDING_LED_COMMAND = {
+            "command_id": command_id,
             "book_title": request.book_title,
             "color": selected_color["key"],
             "rgb": selected_color["rgb"],
-            "wled_status_code": led_response.status_code
+            "wled_payload": wled_payload,
+            "created_at": int(time.time()),
+        }
+
+        return {
+            "status": "ok",
+            "mode": "bridge",
+            "message": "LED command queued for local bridge.",
+            "command": PENDING_LED_COMMAND,
         }
 
     except Exception as e:
         return {
             "status": "error",
-            "message": str(e)
+            "message": str(e),
         }
+
+
+@app.get("/led-command")
+def get_led_command():
+    if PENDING_LED_COMMAND is None:
+        return {
+            "has_command": False,
+            "command": None,
+        }
+
+    return {
+        "has_command": True,
+        "command": PENDING_LED_COMMAND,
+    }
+
+
+@app.post("/led-command/ack")
+def acknowledge_led_command(request: LedAckRequest):
+    global PENDING_LED_COMMAND
+
+    if PENDING_LED_COMMAND and PENDING_LED_COMMAND["command_id"] == request.command_id:
+        PENDING_LED_COMMAND = None
+        return {
+            "status": "ok",
+            "message": "LED command acknowledged and cleared.",
+        }
+
+    return {
+        "status": "ignored",
+        "message": "No matching command to acknowledge.",
+    }
