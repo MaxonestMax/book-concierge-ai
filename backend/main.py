@@ -9,7 +9,7 @@ import json
 import hashlib
 from openai import OpenAI
 
-app = FastAPI(title="AI Book Concierge API", version="1.2.0")
+app = FastAPI(title="AI Book Concierge API", version="1.3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -25,7 +25,8 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4.1-mini")
 
 client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
-PENDING_LED_COMMAND = None
+
+PENDING_LED_COMMANDS = []
 
 
 class RecommendRequest(BaseModel):
@@ -65,10 +66,13 @@ ALLOWED_COLORS = [
 
 def detect_language(text: str) -> str:
     text = text or ""
+
     if any("\u0590" <= ch <= "\u05FF" for ch in text):
         return "he"
+
     if any("\u0400" <= ch <= "\u04FF" for ch in text):
         return "ru"
+
     return "en"
 
 
@@ -81,6 +85,7 @@ def stable_color_for_title(title: str):
 
 def normalize_color_key(color: str) -> str:
     value = (color or "").strip().lower()
+
     mapping = {
         "blue": "blue", "синий": "blue", "כחול": "blue",
         "purple": "purple", "фиолетовый": "purple", "סגול": "purple",
@@ -91,23 +96,28 @@ def normalize_color_key(color: str) -> str:
         "cyan": "cyan", "голубой": "cyan", "טורקיז": "cyan",
         "white": "white", "белый": "white", "לבן": "white",
     }
+
     return mapping.get(value, value)
 
 
 def color_by_key(color_key: str):
     normalized = normalize_color_key(color_key)
+
     for color in ALLOWED_COLORS:
         if color["key"] == normalized:
             return color
+
     return ALLOWED_COLORS[0]
 
 
 def parse_led_range(value: str):
     text = str(value or "").strip()
+
     if not text or "-" not in text:
         return None
 
     parts = text.split("-")
+
     try:
         start = int(parts[0].strip())
         end = int(parts[1].strip())
@@ -120,7 +130,7 @@ def parse_led_range(value: str):
     return {
         "start": start,
         "end": end,
-        "stop": end + 1
+        "stop": end + 1,
     }
 
 
@@ -131,6 +141,7 @@ def normalize_columns(df):
         .str.lower()
         .str.replace(" ", "_", regex=False)
     )
+
     return df
 
 
@@ -150,6 +161,7 @@ def read_inventory():
     ]
 
     missing = [col for col in required_columns if col not in df.columns]
+
     if missing:
         raise ValueError(f"Missing columns in Google Sheet: {missing}")
 
@@ -178,6 +190,7 @@ def read_inventory():
 
     for _, row in df.head(300).iterrows():
         price_value = row.get("price", 0)
+
         if pd.isna(price_value):
             price_value = 0
 
@@ -232,7 +245,7 @@ def root():
     return {
         "status": "ok",
         "service": "AI Book Concierge API",
-        "version": "1.2.0",
+        "version": "1.3.0",
     }
 
 
@@ -240,12 +253,15 @@ def root():
 def debug():
     try:
         inventory = read_inventory()
+
         return {
             "status": "ok",
             "service": "AI Book Concierge API",
             "total_available": len(inventory),
             "sample": inventory[:10],
+            "pending_led_commands": len(PENDING_LED_COMMANDS),
         }
+
     except Exception as e:
         return {
             "status": "error",
@@ -257,12 +273,14 @@ def debug():
 def debug_all():
     try:
         inventory = read_inventory()
+
         return {
             "status": "ok",
             "service": "AI Book Concierge API",
             "total_available": len(inventory),
             "data": inventory,
         }
+
     except Exception as e:
         return {
             "status": "error",
@@ -274,11 +292,13 @@ def debug_all():
 def recommend_books(request: RecommendRequest):
     try:
         inventory = read_inventory()
+
         return {
             "results": inventory[:300],
             "total_available": len(inventory),
             "message": "Returned all available books.",
         }
+
     except Exception as e:
         return {
             "results": [],
@@ -362,6 +382,7 @@ Return JSON only:
 
         try:
             return json.loads(raw_text)
+
         except json.JSONDecodeError:
             return {
                 "recommendations": [],
@@ -378,7 +399,7 @@ Return JSON only:
 
 @app.post("/set-led")
 def set_led(request: SetLedRequest):
-    global PENDING_LED_COMMAND
+    global PENDING_LED_COMMANDS
 
     try:
         book = find_book_by_title(request.book_title)
@@ -402,7 +423,7 @@ def set_led(request: SetLedRequest):
         selected_color = color_by_key(request.color)
         command_id = f"cmd_{int(time.time() * 1000)}"
 
-        PENDING_LED_COMMAND = {
+        command = {
             "command_id": command_id,
             "book_title": book["title"],
             "color": selected_color["key"],
@@ -412,15 +433,20 @@ def set_led(request: SetLedRequest):
             "end": led_range["end"],
             "stop": led_range["stop"],
             "duration_seconds": 10,
-            "effect": "breathing",
+            "effect": "layered_travel_breathing",
             "created_at": int(time.time()),
         }
 
+        PENDING_LED_COMMANDS.append(command)
+
+        PENDING_LED_COMMANDS = PENDING_LED_COMMANDS[-20:]
+
         return {
             "status": "ok",
-            "mode": "bridge",
-            "message": "LED range command queued for local bridge.",
-            "command": PENDING_LED_COMMAND,
+            "mode": "bridge_queue",
+            "message": "LED command added to queue for local bridge.",
+            "command": command,
+            "pending_count": len(PENDING_LED_COMMANDS),
         }
 
     except Exception as e:
@@ -432,7 +458,7 @@ def set_led(request: SetLedRequest):
 
 @app.get("/led-command")
 def get_led_command():
-    if PENDING_LED_COMMAND is None:
+    if not PENDING_LED_COMMANDS:
         return {
             "has_command": False,
             "command": None,
@@ -440,22 +466,41 @@ def get_led_command():
 
     return {
         "has_command": True,
-        "command": PENDING_LED_COMMAND,
+        "command": PENDING_LED_COMMANDS[0],
+    }
+
+
+@app.get("/led-commands")
+def get_led_commands():
+    return {
+        "has_commands": len(PENDING_LED_COMMANDS) > 0,
+        "commands": PENDING_LED_COMMANDS,
+        "count": len(PENDING_LED_COMMANDS),
     }
 
 
 @app.post("/led-command/ack")
 def acknowledge_led_command(request: LedAckRequest):
-    global PENDING_LED_COMMAND
+    global PENDING_LED_COMMANDS
 
-    if PENDING_LED_COMMAND and PENDING_LED_COMMAND["command_id"] == request.command_id:
-        PENDING_LED_COMMAND = None
+    before = len(PENDING_LED_COMMANDS)
+
+    PENDING_LED_COMMANDS = [
+        command for command in PENDING_LED_COMMANDS
+        if command["command_id"] != request.command_id
+    ]
+
+    after = len(PENDING_LED_COMMANDS)
+
+    if before != after:
         return {
             "status": "ok",
-            "message": "LED command acknowledged and cleared.",
+            "message": "LED command acknowledged and removed.",
+            "pending_count": after,
         }
 
     return {
         "status": "ignored",
         "message": "No matching command to acknowledge.",
+        "pending_count": after,
     }
