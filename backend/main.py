@@ -9,7 +9,7 @@ import json
 import hashlib
 from openai import OpenAI
 
-app = FastAPI(title="AI Book Concierge API", version="1.3.0")
+app = FastAPI(title="AI Book Concierge API", version="1.4.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -56,12 +56,16 @@ ALLOWED_COLORS = [
     {"key": "blue", "emoji": "🔵", "en": "Blue", "ru": "синий", "he": "כחול", "rgb": [0, 80, 255]},
     {"key": "purple", "emoji": "🟣", "en": "Purple", "ru": "фиолетовый", "he": "סגול", "rgb": [140, 0, 255]},
     {"key": "red", "emoji": "🔴", "en": "Red", "ru": "красный", "he": "אדום", "rgb": [255, 0, 0]},
-    {"key": "orange", "emoji": "🟠", "en": "Orange", "ru": "оранжевый", "he": "כתום", "rgb": [255, 120, 0]},
     {"key": "yellow", "emoji": "🟡", "en": "Yellow", "ru": "жёлтый", "he": "צהוב", "rgb": [255, 220, 0]},
     {"key": "green", "emoji": "🟢", "en": "Green", "ru": "зелёный", "he": "ירוק", "rgb": [0, 255, 80]},
     {"key": "cyan", "emoji": "🔷", "en": "Cyan", "ru": "голубой", "he": "טורקיז", "rgb": [0, 220, 255]},
     {"key": "white", "emoji": "⚪", "en": "White", "ru": "белый", "he": "לבן", "rgb": [255, 255, 255]},
 ]
+
+
+def normalize_bool(value) -> bool:
+    text = str(value or "").strip().lower()
+    return text in ["true", "yes", "1", "available", "in stock", "в наличии", "במלאי"]
 
 
 def detect_language(text: str) -> str:
@@ -90,7 +94,6 @@ def normalize_color_key(color: str) -> str:
         "blue": "blue", "синий": "blue", "כחול": "blue",
         "purple": "purple", "фиолетовый": "purple", "סגול": "purple",
         "red": "red", "красный": "red", "אדום": "red",
-        "orange": "orange", "оранжевый": "orange", "כתום": "orange",
         "yellow": "yellow", "жёлтый": "yellow", "желтый": "yellow", "צהוב": "yellow",
         "green": "green", "зелёный": "green", "зеленый": "green", "ירוק": "green",
         "cyan": "cyan", "голубой": "cyan", "טורקיז": "cyan",
@@ -165,13 +168,7 @@ def read_inventory():
     if missing:
         raise ValueError(f"Missing columns in Google Sheet: {missing}")
 
-    df["in_stock"] = (
-        df["in_stock"]
-        .astype(str)
-        .str.strip()
-        .str.lower()
-        .isin(["true", "yes", "1", "available", "in stock", "в наличии", "במלאי"])
-    )
+    df["in_stock"] = df["in_stock"].apply(normalize_bool)
 
     df["price"] = (
         df["price"]
@@ -205,6 +202,14 @@ def read_inventory():
         if "led_range" in df.columns:
             led_range = str(row.get("led_range", "") or "").strip()
 
+        sale = False
+        if "sale" in df.columns:
+            sale = normalize_bool(row.get("sale", ""))
+
+        more_info = ""
+        if "more_info" in df.columns:
+            more_info = str(row.get("more_info", "") or "").strip()
+
         results.append({
             "title": title,
             "author": str(row.get("author", "")).strip(),
@@ -215,6 +220,8 @@ def read_inventory():
             "in_stock": True,
             "image_url": image_url,
             "led_range": led_range,
+            "sale": sale,
+            "more_info": more_info,
             "color_key": color["key"],
             "color_emoji": color["emoji"],
             "color_en": color["en"],
@@ -245,7 +252,7 @@ def root():
     return {
         "status": "ok",
         "service": "AI Book Concierge API",
-        "version": "1.3.0",
+        "version": "1.4.0",
     }
 
 
@@ -259,6 +266,7 @@ def debug():
             "service": "AI Book Concierge API",
             "total_available": len(inventory),
             "sample": inventory[:10],
+            "sale_count": len([book for book in inventory if book.get("sale") is True]),
             "pending_led_commands": len(PENDING_LED_COMMANDS),
         }
 
@@ -278,6 +286,7 @@ def debug_all():
             "status": "ok",
             "service": "AI Book Concierge API",
             "total_available": len(inventory),
+            "sale_count": len([book for book in inventory if book.get("sale") is True]),
             "data": inventory,
         }
 
@@ -296,6 +305,7 @@ def recommend_books(request: RecommendRequest):
         return {
             "results": inventory[:300],
             "total_available": len(inventory),
+            "sale_count": len([book for book in inventory if book.get("sale") is True]),
             "message": "Returned all available books.",
         }
 
@@ -303,6 +313,7 @@ def recommend_books(request: RecommendRequest):
         return {
             "results": [],
             "total_available": 0,
+            "sale_count": 0,
             "message": f"Server error: {str(e)}",
         }
 
@@ -313,11 +324,17 @@ def chat(request: ChatRequest):
         if client is None:
             return {
                 "recommendations": [],
+                "sale_picks": [],
                 "message": "OpenAI API key is not configured on the server.",
             }
 
         inventory = read_inventory()
         user_language = request.language or detect_language(request.query)
+
+        sale_inventory = [
+            book for book in inventory
+            if book.get("sale") is True and book.get("in_stock") is True
+        ]
 
         system_instructions = """
 You are AI Book Concierge, a smart bookstore assistant.
@@ -328,12 +345,14 @@ Recommend books ONLY from this inventory.
 Rules:
 - Never invent books.
 - Never use books outside the provided inventory.
-- Choose the best 3-5 books unless the user asks for all.
+- Choose the best 3-5 recommendations unless the user asks for all.
 - Respect genre, price, age, mood, author, and language.
 - Always use NIS.
 - Do not use book emojis.
 - Use only the color data attached to each book.
 - Return JSON only.
+- Preserve sale, more_info, image_url, led_range, and color_key fields exactly from inventory.
+- sale_picks must contain ONLY books where sale is true and in_stock is true.
 """
 
         output_schema = """
@@ -347,13 +366,34 @@ Return JSON only:
       "currency": "NIS",
       "category": "string",
       "description": "short description in the user's language",
+      "more_info": "translated detailed info in user's language",
       "image_url": "string",
       "led_range": "30-40",
+      "sale": true,
       "color_key": "blue",
       "color_emoji": "🔵",
       "color_label": "Blue",
       "display_line": "Title — Author — 89 NIS — 🔵 Blue",
       "reason": "short reason in user's language"
+    }
+  ],
+  "sale_picks": [
+    {
+      "title": "string",
+      "author": "string",
+      "price": 89,
+      "currency": "NIS",
+      "category": "string",
+      "description": "short description in the user's language",
+      "more_info": "translated detailed info in user's language",
+      "image_url": "string",
+      "led_range": "30-40",
+      "sale": true,
+      "color_key": "blue",
+      "color_emoji": "🔵",
+      "color_label": "Blue",
+      "display_line": "Title — Author — 89 NIS — 🔵 Blue",
+      "reason": "short sale reason in user's language"
     }
   ],
   "message": "short message in user's language"
@@ -364,11 +404,18 @@ Return JSON only:
             "user_request": request.query,
             "user_language": user_language,
             "inventory": inventory[:300],
+            "sale_inventory": sale_inventory[:300],
             "format_rules": {
                 "price": "Always write price as 89 NIS",
                 "display_line": "Title — Author — Price NIS — color emoji + color name",
                 "no_led_word": "Do not write the word LED",
                 "no_book_icons": "Do not use book emojis",
+                "sale_rules": [
+                    "sale_picks must use only books where sale is true and in_stock is true",
+                    "If there are 3 or more sale books, return exactly 3 sale_picks",
+                    "If there are fewer than 3 sale books, return all available sale books",
+                    "Do not mark non-sale books as sale"
+                ]
             },
         }
 
@@ -381,11 +428,25 @@ Return JSON only:
         raw_text = response.output_text.strip()
 
         try:
-            return json.loads(raw_text)
+            parsed = json.loads(raw_text)
+
+            if "recommendations" not in parsed:
+                parsed["recommendations"] = []
+
+            if "sale_picks" not in parsed:
+                parsed["sale_picks"] = []
+
+            parsed["sale_picks"] = [
+                book for book in parsed["sale_picks"]
+                if book.get("sale") is True
+            ]
+
+            return parsed
 
         except json.JSONDecodeError:
             return {
                 "recommendations": [],
+                "sale_picks": [],
                 "message": "The AI response could not be parsed as JSON.",
                 "raw_response": raw_text,
             }
@@ -393,6 +454,7 @@ Return JSON only:
     except Exception as e:
         return {
             "recommendations": [],
+            "sale_picks": [],
             "message": f"Server error: {str(e)}",
         }
 
@@ -438,7 +500,6 @@ def set_led(request: SetLedRequest):
         }
 
         PENDING_LED_COMMANDS.append(command)
-
         PENDING_LED_COMMANDS = PENDING_LED_COMMANDS[-20:]
 
         return {
