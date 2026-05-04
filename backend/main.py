@@ -53,13 +53,13 @@ class LedAckRequest(BaseModel):
 
 
 ALLOWED_COLORS = [
-    {"key": "blue", "emoji": "🔵", "en": "Blue", "ru": "синий", "he": "כחול", "rgb": [0, 80, 255]},
-    {"key": "purple", "emoji": "🟣", "en": "Purple", "ru": "фиолетовый", "he": "סגול", "rgb": [140, 0, 255]},
-    {"key": "red", "emoji": "🔴", "en": "Red", "ru": "красный", "he": "אדום", "rgb": [255, 0, 0]},
-    {"key": "yellow", "emoji": "🟡", "en": "Yellow", "ru": "жёлтый", "he": "צהוב", "rgb": [255, 220, 0]},
-    {"key": "green", "emoji": "🟢", "en": "Green", "ru": "зелёный", "he": "ירוק", "rgb": [0, 255, 80]},
-    {"key": "cyan", "emoji": "🔷", "en": "Cyan", "ru": "голубой", "he": "טורקיז", "rgb": [0, 220, 255]},
-    {"key": "white", "emoji": "⚪", "en": "White", "ru": "белый", "he": "לבן", "rgb": [255, 255, 255]},
+    {"key": "blue",   "emoji": "🔵", "en": "Blue",   "ru": "синий",       "he": "כחול",   "rgb": [0, 0, 255]},
+    {"key": "purple", "emoji": "🟣", "en": "Purple", "ru": "фиолетовый",  "he": "סגול",   "rgb": [180, 0, 255]},
+    {"key": "red",    "emoji": "🔴", "en": "Red",    "ru": "красный",     "he": "אדום",   "rgb": [255, 0, 0]},
+    {"key": "yellow", "emoji": "🟡", "en": "Yellow", "ru": "жёлтый",      "he": "צהוב",   "rgb": [255, 200, 0]},
+    {"key": "green",  "emoji": "🟢", "en": "Green",  "ru": "зелёный",     "he": "ירוק",   "rgb": [0, 255, 0]},
+    {"key": "cyan",   "emoji": "🔷", "en": "Cyan",   "ru": "голубой",     "he": "טורקיז", "rgb": [0, 255, 255]},
+    {"key": "white",  "emoji": "⚪", "en": "White",  "ru": "белый",       "he": "לבן",   "rgb": [255, 255, 255]},
 ]
 
 
