@@ -20,8 +20,11 @@ app = FastAPI(
 # CONFIG
 # ============================================================
 
-# ВСТАВЬ СЮДА СВОЙ GOOGLE SHEET CSV URL
-SHEET_URL = "https://docs.google.com/spreadsheets/d/XXXX/pub?output=csv"
+# Set SHEET_URL in Render to the published Google Sheet CSV URL.
+SHEET_URL = os.environ.get(
+    "SHEET_URL",
+    "https://docs.google.com/spreadsheets/d/XXXX/pub?output=csv",
+)
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.2")
@@ -266,6 +269,13 @@ def clamp_led_range(led_range: List[int]) -> List[int]:
     return [start, stop]
 
 
+def safe_sheet_url_preview() -> str:
+    if "XXXX" in SHEET_URL:
+        return SHEET_URL
+
+    return SHEET_URL[:80] + ("..." if len(SHEET_URL) > 80 else "")
+
+
 # ============================================================
 # INVENTORY
 # ============================================================
@@ -493,6 +503,43 @@ def debug_all():
     except Exception as e:
         return {
             "status": "error",
+            "message": str(e),
+        }
+
+
+@app.get("/debug-sheet")
+def debug_sheet():
+    try:
+        url = f"{SHEET_URL}&t={int(time.time())}"
+        df = pd.read_csv(url)
+        df.columns = df.columns.str.strip().str.lower()
+
+        preview_columns = ["title", "led_range"]
+        available_preview_columns = [
+            column for column in preview_columns if column in df.columns
+        ]
+
+        preview = []
+        if available_preview_columns:
+            preview = (
+                df[available_preview_columns]
+                .head(10)
+                .fillna("")
+                .to_dict(orient="records")
+            )
+
+        return {
+            "status": "ok",
+            "sheet_url_preview": safe_sheet_url_preview(),
+            "columns": list(df.columns),
+            "row_count": int(len(df)),
+            "preview": preview,
+        }
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "sheet_url_preview": safe_sheet_url_preview(),
             "message": str(e),
         }
 
