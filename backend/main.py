@@ -20,10 +20,12 @@ app = FastAPI(
 # CONFIG
 # ============================================================
 
-# Set SHEET_URL in Render to the published Google Sheet CSV URL.
-SHEET_URL = os.environ.get(
-    "SHEET_URL",
-    "https://docs.google.com/spreadsheets/d/XXXX/pub?output=csv",
+# Set one of these in Render to the published Google Sheet CSV URL.
+SHEET_URL = (
+    os.environ.get("SHEET_URL")
+    or os.environ.get("GOOGLE_SHEET_CSV_URL")
+    or os.environ.get("GOOGLE_SHEET_URL")
+    or "https://docs.google.com/spreadsheets/d/e/2PACX-1vRojoKX5x12MGB5PbwNE2qTErL_HjpDUOupVIkXQtRrLabnXx4O1FZKKjetkU6r8AfJQfhDanuWQ1qh/pub?output=csv"
 )
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
