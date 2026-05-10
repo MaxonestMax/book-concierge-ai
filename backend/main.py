@@ -247,6 +247,12 @@ def parse_led_range(value: Any) -> Optional[List[int]]:
     if len(parts) >= 2:
         return [int(float(parts[0])), int(float(parts[1]))]
 
+    try:
+        point = int(float(text))
+        return [point, point + 1]
+    except ValueError:
+        pass
+
     return None
 
 
