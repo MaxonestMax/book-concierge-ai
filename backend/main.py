@@ -370,7 +370,7 @@ def read_inventory() -> List[Dict[str, Any]]:
     return results
 
 
-def find_led_range_for_book(book_title: str) -> List[int]:
+def find_led_range_for_book(book_title: str) -> Optional[List[int]]:
     requested_title = normalize_title(book_title)
 
     try:
@@ -385,25 +385,44 @@ def find_led_range_for_book(book_title: str) -> List[int]:
 
                 break
 
+        for item in inventory:
+            inventory_title = normalize_title(item.get("title", ""))
+
+            if requested_title and (
+                requested_title in inventory_title
+                or inventory_title in requested_title
+            ):
+                led_range = item.get("led_range")
+
+                if led_range:
+                    return clamp_led_range(led_range)
+
     except Exception as e:
         print(f"Could not read led_range from inventory: {e}")
 
-    print(f"LED range missing for '{book_title}', using fallback {DEFAULT_LED_RANGE}")
-    return clamp_led_range(DEFAULT_LED_RANGE)
+    return None
 
 
 def build_led_command(request: SetLedRequest) -> Dict[str, Any]:
     selected_color = color_by_key(request.color)
+    led_range = find_led_range_for_book(request.book_title)
+    led_range_source = "sheet"
 
-    if request.start is not None and request.stop is not None:
-        led_range = clamp_led_range([request.start, request.stop])
-    else:
-        led_range = parse_led_range(request.led_range)
-
-        if led_range is None:
-            led_range = find_led_range_for_book(request.book_title)
+    if led_range is None:
+        if request.start is not None and request.stop is not None:
+            led_range = clamp_led_range([request.start, request.stop])
+            led_range_source = "request_start_stop"
         else:
-            led_range = clamp_led_range(led_range)
+            led_range = parse_led_range(request.led_range)
+
+            if led_range is not None:
+                led_range = clamp_led_range(led_range)
+                led_range_source = "request_led_range"
+
+    if led_range is None:
+        print(f"LED range missing for '{request.book_title}', using fallback {DEFAULT_LED_RANGE}")
+        led_range = clamp_led_range(DEFAULT_LED_RANGE)
+        led_range_source = "fallback"
 
     return {
         "command_id": f"led_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}",
@@ -413,6 +432,7 @@ def build_led_command(request: SetLedRequest) -> Dict[str, Any]:
         "start": led_range[0],
         "stop": led_range[1],
         "led_range": led_range,
+        "led_range_source": led_range_source,
         "duration_seconds": request.duration_seconds or DEFAULT_LED_DURATION_SECONDS,
         "created_at": time.time(),
     }
@@ -475,6 +495,19 @@ def debug_all():
             "status": "error",
             "message": str(e),
         }
+
+
+@app.get("/debug-led-range")
+def debug_led_range(book_title: str):
+    led_range = find_led_range_for_book(book_title)
+
+    return {
+        "status": "ok",
+        "book_title": book_title,
+        "led_range": led_range,
+        "fallback": clamp_led_range(DEFAULT_LED_RANGE),
+        "source": "sheet" if led_range else "missing",
+    }
 
 
 @app.get("/led-commands")
